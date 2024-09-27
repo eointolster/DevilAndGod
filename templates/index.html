@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>God and Devil Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .chat-container {
+            display: flex;
+            justify-content: space-between;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .chat-box {
+            width: 45%;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #devil-chat {
+            background-color: #2c2c2c;
+            color: #ffffff;
+        }
+        #god-chat {
+            background-color: #f8f8f8;
+            color: #000000;
+        }
+        .icon {
+            width: 100px;
+            height: 100px;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .active {
+            border: 3px solid #00ff00;
+            border-radius: 50%;
+        }
+        .vibrate {
+            animation: vibrate 0.3s linear infinite;
+        }
+        @keyframes vibrate {
+            0% { transform: translate(0); }
+            25% { transform: translate(2px, 2px); }
+            50% { transform: translate(0); }
+            75% { transform: translate(-2px, -2px); }
+            100% { transform: translate(0); }
+        }
+        .messages {
+            width: 100%;
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        #user-input {
+            width: 70%;
+            padding: 10px;
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-box" id="devil-chat">
+            <h2>Devil</h2>
+            <img src="/static/devil-icon.png" alt="Devil" class="icon" id="devil-icon" onclick="selectBot('devil')">
+            <div id="devil-messages" class="messages"></div>
+        </div>
+        <div class="chat-box" id="god-chat">
+            <h2>God</h2>
+            <img src="/static/god-icon.png" alt="God" class="icon" id="god-icon" onclick="selectBot('god')">
+            <div id="god-messages" class="messages"></div>
+        </div>
+    </div>
+    <div style="text-align: center; margin-top: 20px;">
+        <input type="text" id="user-input" placeholder="Type your message...">
+        <button onclick="sendMessage()">Send</button>
+        <button onclick="chatBetweenBots()">Let them chat</button>
+    </div>
+
+    <script>
+        let selectedBot = null;
+        let isPlaying = false;
+
+        function selectBot(bot) {
+            selectedBot = bot;
+            document.getElementById('devil-icon').classList.remove('active');
+            document.getElementById('god-icon').classList.remove('active');
+            document.getElementById(`${bot}-icon`).classList.add('active');
+        }
+
+        function sendMessage() {
+            if (!selectedBot) {
+                alert("Please select a bot to chat with.");
+                return;
+            }
+
+            const message = document.getElementById('user-input').value;
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: message, bot: selectedBot }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                const messagesDiv = document.getElementById(`${selectedBot}-messages`);
+                messagesDiv.innerHTML += `<p>You: ${message}</p>`;
+                messagesDiv.innerHTML += `<p>${selectedBot.charAt(0).toUpperCase() + selectedBot.slice(1)}: ${data.response}</p>`;
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                document.getElementById('user-input').value = '';
+                
+                streamAudio(data.response, data.voice_id);
+            });
+        }
+
+        function streamAudio(text, voiceId) {
+            const chunkSize = 200;
+            const chunks = [];
+            
+            for (let i = 0; i < text.length; i += chunkSize) {
+                chunks.push(text.slice(i, i + chunkSize));
+            }
+
+            let audioQueue = [];
+            isPlaying = false;
+
+            function playNextChunk() {
+                if (audioQueue.length > 0 && !isPlaying) {
+                    isPlaying = true;
+                    const audio = new Audio(URL.createObjectURL(audioQueue.shift()));
+                    audio.onended = () => {
+                        isPlaying = false;
+                        playNextChunk();
+                    };
+                    audio.play();
+                    document.getElementById(`${selectedBot}-icon`).classList.add('vibrate');
+                } else if (audioQueue.length === 0 && !isPlaying) {
+                    document.getElementById(`${selectedBot}-icon`).classList.remove('vibrate');
+                }
+            }
+
+            function processChunk(chunk) {
+                return fetch('/stream_audio', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text: chunk, voice_id: voiceId }),
+                })
+                .then(response => response.blob())
+                .then(blob => {
+                    audioQueue.push(blob);
+                    playNextChunk();
+                })
+                .catch(error => console.error('Error streaming audio:', error));
+            }
+
+            chunks.reduce((promise, chunk) => {
+                return promise.then(() => processChunk(chunk));
+            }, Promise.resolve());
+        }
+
+        function chatBetweenBots() {
+            fetch('/chat_between_bots', {
+                method: 'POST',
+            })
+            .then(response => response.json())
+            .then(data => {
+                const godMessagesDiv = document.getElementById('god-messages');
+                const devilMessagesDiv = document.getElementById('devil-messages');
+
+                godMessagesDiv.innerHTML += `<p>God: ${data.god_response}</p>`;
+                devilMessagesDiv.innerHTML += `<p>Devil: ${data.devil_response}</p>`;
+                godMessagesDiv.scrollTop = godMessagesDiv.scrollHeight;
+                devilMessagesDiv.scrollTop = devilMessagesDiv.scrollHeight;
+
+                // Stream audio for both responses
+                streamAudio(data.god_response, data.god_voice_id);
+                setTimeout(() => {
+                    selectedBot = 'devil';
+                    streamAudio(data.devil_response, data.devil_voice_id);
+                }, 1000);
+            });
+        }
+    </script>
+</body>
+</html>
